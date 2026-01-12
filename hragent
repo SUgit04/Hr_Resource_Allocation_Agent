@@ -1,0 +1,741 @@
+# Guide: Adding New Agents to the HR Recruitment System
+
+This document provides a step-by-step guide for adding new agents to the system. Use the existing `resource_allocation` agent as a reference implementation.
+
+---
+
+## Table of Contents
+
+1. [Architecture Overview](#1-architecture-overview)
+2. [Files to Modify](#2-files-to-modify)
+3. [Step-by-Step Implementation](#3-step-by-step-implementation)
+4. [Code Templates](#4-code-templates)
+5. [Example: Adding a Leave Management Agent](#5-example-adding-a-leave-management-agent)
+6. [Testing Your New Agent](#6-testing-your-new-agent)
+7. [Checklist](#7-checklist)
+
+---
+
+## 1. Architecture Overview
+
+### How the System Works
+
+```
+User Message → Intent Classification → Route to Agent → Agent Nodes → Tools → Response
+```
+
+### Key Concepts
+
+| Concept | Description | Example |
+|---------|-------------|---------|
+| **Intent** | Category that triggers an agent | `"resource_allocation"`, `"leave_management"` |
+| **Agent** | A set of nodes handling a specific workflow | Resource Allocation Agent |
+| **Node** | A function that processes state and returns updates | `extract_requirements()`, `generate_jd()` |
+| **Tool** | A utility function called by nodes | `jd_generator.generate_jd()` |
+| **State** | Data that flows through the workflow | `AgentState` TypedDict |
+
+### Current Flow
+
+```
+classify_intent
+    ├── resource_allocation → check_jd_status → [nodes] → END
+    ├── other → handle_other → END
+    ├── unclear → handle_unclear → END
+    └── exit → handle_exit → END
+```
+
+---
+
+## 2. Files to Modify
+
+| Order | File | Purpose |
+|-------|------|---------|
+| 1 | `agent/src/prompts/templates.py` | Add intent description to classifier prompt |
+| 2 | `agent/src/nodes/intent_classifier.py` | Add intent to validation list |
+| 3 | `agent/src/graph/workflow.py` | Add routing logic, nodes, and edges |
+| 4 | `agent/src/nodes/<your_agent>.py` | **CREATE** - Node functions for your agent |
+| 5 | `agent/src/tools/<your_tool>.py` | **CREATE** (optional) - Tool functions |
+| 6 | `agent/src/state/schemas.py` | Add agent-specific state fields |
+
+---
+
+## 3. Step-by-Step Implementation
+
+### Step 1: Update Intent Classifier Prompt
+
+**File:** `agent/src/prompts/templates.py`
+
+Add your new intent category to `INTENT_CLASSIFIER_PROMPT`:
+
+```python
+    INTENT_CLASSIFIER_PROMPT = """You are an intent classifier for an HR recruitment system.
+    Your job is to classify the user's message into one of the following categories:
+
+    CATEGORIES:
+    - resource_allocation: User wants to request a new resource/hire for a project
+    Examples: "I need a Python developer", "Looking for a senior engineer"
+
+    - leave_management: User wants to apply for or manage leave          # <-- ADD YOUR INTENT
+    Examples: "I want to apply for leave", "Check my leave balance"    # <-- ADD EXAMPLES
+
+    - exit: User wants to end the conversation or cancel
+    Examples: "cancel", "stop", "go back", "exit"
+
+    - unclear: The message is ambiguous
+    Examples: "maybe", "I'm not sure"
+
+    - other: Any other request
+    Examples: "What's the weather?", "Tell me a joke"
+
+    ...
+    """
+```
+
+---
+
+### Step 2: Add to Valid Intents List
+
+**File:** `agent/src/nodes/intent_classifier.py`
+
+Update the `valid_intents` list (around line 82):
+
+```python
+def classify_intent(state: AgentState) -> dict:
+    # ... existing code ...
+
+    try:
+        response = model.invoke(llm_messages)
+        result = json.loads(response.content)
+
+        intent = result.get("intent", "unclear")
+        confidence = result.get("confidence", 0.5)
+
+        # Validate intent - ADD YOUR NEW INTENT HERE
+        valid_intents = [
+            "resource_allocation",
+            "leave_management",      # <-- ADD
+            "other",
+            "unclear",
+            "exit"
+        ]
+        if intent not in valid_intents:
+            intent = "unclear"
+            confidence = 0.5
+        # ...
+```
+
+Also update the routing logic for active agents (around line 57-62):
+
+```python
+if current_agent and not agent_completed:
+    # Map current_agent to its intent
+    agent_to_intent = {
+        "resource_allocation": "resource_allocation",
+        "leave_management": "leave_management",  # <-- ADD
+    }
+    return {
+        "intent": agent_to_intent.get(current_agent, current_agent),
+        "intent_confidence": 1.0
+    }
+```
+
+---
+
+### Step 3: Update Workflow Routing and Add Nodes
+
+**File:** `agent/src/graph/workflow.py`
+
+#### 3a. Import your new node functions
+
+```python
+from nodes.intent_classifier import classify_intent
+from nodes.resource_allocation import (
+    extract_requirements,
+    generate_job_description,
+    # ... existing imports
+)
+# ADD: Import your new agent's nodes
+from nodes.leave_management import (
+    check_leave_balance,
+    process_leave_request,
+    submit_leave_application
+)
+```
+
+#### 3b. Update the routing function
+
+```python
+def route_after_intent(state: AgentState) -> Literal[
+    "check_jd_status",
+    "check_leave_status",      # <-- ADD
+    "handle_other",
+    "handle_unclear",
+    "handle_exit"
+]:
+    """Route based on classified intent."""
+    intent = state.get("intent", "unclear")
+    current_agent = state.get("current_agent")
+
+    # Check if already in an active agent workflow
+    if current_agent and not state.get("agent_completed", False):
+        if current_agent == "resource_allocation":
+            return "check_jd_status"
+        elif current_agent == "leave_management":   # <-- ADD
+            return "check_leave_status"             # <-- ADD
+
+    # Route based on new intent
+    if intent == "resource_allocation":
+        return "check_jd_status"
+    elif intent == "leave_management":              # <-- ADD
+        return "check_leave_status"                 # <-- ADD
+    elif intent == "exit":
+        return "handle_exit"
+    elif intent == "other":
+        return "handle_other"
+    else:
+        return "handle_unclear"
+```
+
+#### 3c. Add nodes in `create_workflow()`
+
+```python
+def create_workflow() -> StateGraph:
+    workflow = StateGraph(AgentState)
+
+    # ==========================================================================
+    # ADD NODES
+    # ==========================================================================
+
+    # Intent Classification (entry point)
+    workflow.add_node("classify_intent", classify_intent)
+
+    # Resource Allocation Agent nodes (existing)
+    workflow.add_node("check_jd_status", check_jd_status)
+    workflow.add_node("extract_requirements", extract_requirements)
+    workflow.add_node("generate_jd", generate_job_description)
+    workflow.add_node("check_approval", check_approval_node)
+    workflow.add_node("refine_jd", refine_jd_node)
+    workflow.add_node("submit_approval", submit_approval_node)
+
+    # Leave Management Agent nodes (NEW)                          # <-- ADD SECTION
+    workflow.add_node("check_leave_status", check_leave_status)
+    workflow.add_node("process_leave", process_leave_request)
+    workflow.add_node("submit_leave", submit_leave_application)
+
+    # Handlers (existing)
+    workflow.add_node("handle_other", handle_other_request)
+    workflow.add_node("handle_unclear", handle_unclear_intent)
+    workflow.add_node("handle_exit", handle_exit)
+```
+
+#### 3d. Add edges for your agent
+
+```python
+    # ==========================================================================
+    # ADD EDGES
+    # ==========================================================================
+
+    workflow.set_entry_point("classify_intent")
+
+    # From intent classifier, route based on intent
+    workflow.add_conditional_edges(
+        "classify_intent",
+        route_after_intent,
+        {
+            "check_jd_status": "check_jd_status",
+            "check_leave_status": "check_leave_status",  # <-- ADD
+            "handle_other": "handle_other",
+            "handle_unclear": "handle_unclear",
+            "handle_exit": "handle_exit"
+        }
+    )
+
+    # Leave Management Agent edges (NEW)                          # <-- ADD SECTION
+    workflow.add_conditional_edges(
+        "check_leave_status",
+        route_leave_decision,  # You'll create this function
+        {
+            "process_leave": "process_leave",
+            "submit_leave": "submit_leave"
+        }
+    )
+    workflow.add_edge("process_leave", "submit_leave")
+    workflow.add_edge("submit_leave", END)
+
+    # ... existing edges
+```
+
+---
+
+### Step 4: Create Node File for Your Agent
+
+**File:** `agent/src/nodes/<your_agent>.py` (CREATE NEW FILE)
+
+```python
+"""
+Your Agent Name Nodes
+
+Description of what your agent does.
+"""
+
+import json
+from typing import Literal
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from state.schemas import AgentState
+from prompts.templates import YOUR_AGENT_PROMPT  # Create this
+
+
+def get_capable_model() -> ChatOpenAI:
+    """Get the capable model for complex reasoning tasks."""
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0.3,
+        model_kwargs={"response_format": {"type": "json_object"}}
+    )
+
+
+def check_your_agent_status(state: AgentState) -> dict:
+    """
+    Entry node for your agent.
+    Sets the current_agent and determines next steps.
+    """
+    return {"current_agent": "your_agent_name"}
+
+
+def process_your_request(state: AgentState) -> dict:
+    """
+    Main processing node.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        Partial state update
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return {
+            "error": "No message to process",
+            "current_agent": "your_agent_name"
+        }
+
+    last_message = messages[-1]
+    user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+
+    # Your processing logic here
+    # ...
+
+    return {
+        "your_state_field": processed_data,
+        "response": "Your response to user",
+        "current_agent": "your_agent_name"
+    }
+
+
+def submit_your_request(state: AgentState) -> dict:
+    """
+    Final submission node.
+    Marks the agent workflow as complete.
+    """
+    # Your submission logic here
+    # ...
+
+    return {
+        "agent_completed": True,
+        "current_agent": None,
+        "response": "Submission successful message"
+    }
+
+
+def route_your_decision(state: AgentState) -> Literal["process", "submit", "unclear"]:
+    """
+    Conditional edge function to route based on user's response.
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return "unclear"
+
+    last_message = messages[-1]
+    user_message = last_message.content.lower() if hasattr(last_message, 'content') else ""
+
+    # Your routing logic
+    if "submit" in user_message or "confirm" in user_message:
+        return "submit"
+    else:
+        return "process"
+```
+
+---
+
+### Step 5: Create Tools (Optional)
+
+**File:** `agent/src/tools/<your_tool>.py` (CREATE NEW FILE)
+
+```python
+"""
+Tools for Your Agent
+
+Utility functions called by your agent's nodes.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+from langchain_openai import ChatOpenAI
+
+
+@dataclass
+class YourResult:
+    """Result of your tool operation."""
+    success: bool
+    message: str
+    data_id: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+def your_tool_function(input_data: dict) -> YourResult:
+    """
+    Perform your tool's operation.
+
+    Args:
+        input_data: Input data for the operation
+
+    Returns:
+        YourResult with success status and data
+    """
+    try:
+        # Your logic here
+        result_id = f"RES-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        return YourResult(
+            success=True,
+            message="Operation completed successfully",
+            data_id=result_id,
+            timestamp=datetime.now().isoformat()
+        )
+    except Exception as e:
+        return YourResult(
+            success=False,
+            message=str(e)
+        )
+
+
+def format_result_for_display(result: YourResult, data: dict) -> str:
+    """Format the result for user display."""
+    return f"""
+## Operation Complete
+
+**ID:** {result.data_id}
+**Status:** {'Success' if result.success else 'Failed'}
+**Time:** {result.timestamp}
+
+### Details
+{json.dumps(data, indent=2)}
+"""
+```
+
+---
+
+### Step 6: Update State Schema (If Needed)
+
+**File:** `agent/src/state/schemas.py`
+
+Add agent-specific state fields to `AgentState`:
+
+```python
+class AgentState(TypedDict):
+    """Main state object that flows through the LangGraph workflow."""
+
+    # Conversation messages
+    messages: Annotated[List[BaseMessage], add_messages]
+    session_id: str
+
+    # Intent classification
+    intent: Optional[str]
+    intent_confidence: float
+
+    # Agent tracking
+    current_agent: Optional[str]
+    agent_completed: bool
+
+    # Resource allocation specific state (existing)
+    extracted_requirements: Optional[dict]
+    jd_draft: Optional[dict]
+    jd_iteration_count: int
+    approval_status: str
+
+    # Leave management specific state (NEW)              # <-- ADD
+    leave_request: Optional[dict]                        # <-- ADD
+    leave_balance: Optional[dict]                        # <-- ADD
+
+    # Error handling
+    error: Optional[str]
+    response: Optional[str]
+```
+
+Also update `create_initial_state()`:
+
+```python
+def create_initial_state(session_id: str) -> AgentState:
+    """Create a fresh initial state for a new session."""
+    return AgentState(
+        messages=[],
+        session_id=session_id,
+        intent=None,
+        intent_confidence=0.0,
+        current_agent=None,
+        agent_completed=False,
+        # Resource allocation
+        extracted_requirements=None,
+        jd_draft=None,
+        jd_iteration_count=0,
+        approval_status="pending",
+        # Leave management (NEW)
+        leave_request=None,           # <-- ADD
+        leave_balance=None,           # <-- ADD
+        # Common
+        error=None,
+        response=None
+    )
+```
+
+---
+
+## 4. Code Templates
+
+### Template: New Intent Prompt Addition
+
+```python
+- your_intent_name: Brief description of when this triggers
+  Examples: "example phrase 1", "example phrase 2", "example phrase 3"
+```
+
+### Template: Node Function
+
+```python
+def your_node_name(state: AgentState) -> dict:
+    """
+    Brief description of what this node does.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        Partial state update dict
+    """
+    # 1. Get data from state
+    messages = state.get("messages", [])
+    your_data = state.get("your_field")
+
+    # 2. Process
+    result = process_something(your_data)
+
+    # 3. Return state updates
+    return {
+        "your_field": result,
+        "response": "Message to user",
+        "current_agent": "your_agent_name"
+    }
+```
+
+### Template: Routing Function
+
+```python
+def route_your_decision(state: AgentState) -> Literal["option_a", "option_b", "unclear"]:
+    """Conditional edge function."""
+    # Get relevant data
+    data = state.get("your_field")
+    messages = state.get("messages", [])
+
+    # Decision logic
+    if condition_for_a:
+        return "option_a"
+    elif condition_for_b:
+        return "option_b"
+    else:
+        return "unclear"
+```
+
+---
+
+## 5. Example: Adding a Leave Management Agent
+
+Here's a complete example of adding a simple leave management agent:
+
+### 5.1 Update `prompts/templates.py`
+
+```python
+INTENT_CLASSIFIER_PROMPT = """...
+CATEGORIES:
+- resource_allocation: User wants to request a new resource/hire for a project
+  Examples: "I need a Python developer", "Looking for a senior engineer"
+
+- leave_management: User wants to apply for leave or check leave balance
+  Examples: "I want to apply for leave", "Check my leave balance", "How many leaves do I have?"
+
+- exit: ...
+"""
+```
+
+### 5.2 Update `nodes/intent_classifier.py`
+
+```python
+valid_intents = ["resource_allocation", "leave_management", "other", "unclear", "exit"]
+```
+
+### 5.3 Create `nodes/leave_management.py`
+
+```python
+"""Leave Management Agent Nodes"""
+
+from state.schemas import AgentState
+
+def check_leave_status(state: AgentState) -> dict:
+    """Entry point - check if user has existing leave request."""
+    return {"current_agent": "leave_management"}
+
+def process_leave_request(state: AgentState) -> dict:
+    """Process the leave application."""
+    messages = state.get("messages", [])
+    last_message = messages[-1].content if messages else ""
+
+    # Simple mock - in reality, integrate with HR system
+    return {
+        "leave_request": {
+            "type": "Annual Leave",
+            "days": 5,
+            "status": "pending"
+        },
+        "response": "I've noted your leave request for 5 days of Annual Leave. Would you like to submit this?",
+        "current_agent": "leave_management"
+    }
+
+def submit_leave_application(state: AgentState) -> dict:
+    """Submit the leave application."""
+    leave_request = state.get("leave_request", {})
+
+    return {
+        "agent_completed": True,
+        "current_agent": None,
+        "response": f"Your leave request has been submitted!\n\nType: {leave_request.get('type')}\nDays: {leave_request.get('days')}\n\nYou'll receive a confirmation email shortly."
+    }
+```
+
+### 5.4 Update `graph/workflow.py`
+
+```python
+# Add import
+from nodes.leave_management import (
+    check_leave_status,
+    process_leave_request,
+    submit_leave_application
+)
+
+# Update route_after_intent return type
+def route_after_intent(state) -> Literal["check_jd_status", "check_leave_status", "handle_other", "handle_unclear", "handle_exit"]:
+    intent = state.get("intent", "unclear")
+    if intent == "resource_allocation":
+        return "check_jd_status"
+    elif intent == "leave_management":
+        return "check_leave_status"
+    # ... rest
+
+# In create_workflow():
+workflow.add_node("check_leave_status", check_leave_status)
+workflow.add_node("process_leave", process_leave_request)
+workflow.add_node("submit_leave", submit_leave_application)
+
+# Add edges
+workflow.add_edge("check_leave_status", "process_leave")
+workflow.add_edge("process_leave", "submit_leave")
+workflow.add_edge("submit_leave", END)
+
+# Update conditional edges
+workflow.add_conditional_edges(
+    "classify_intent",
+    route_after_intent,
+    {
+        "check_jd_status": "check_jd_status",
+        "check_leave_status": "check_leave_status",  # ADD
+        "handle_other": "handle_other",
+        "handle_unclear": "handle_unclear",
+        "handle_exit": "handle_exit"
+    }
+)
+```
+
+---
+
+## 6. Testing Your New Agent
+
+### Manual Testing
+
+1. Start the agent server:
+   ```bash
+   cd agent && python src/main.py
+   ```
+
+2. Test intent classification:
+   ```bash
+   curl -X POST http://localhost:8000/api/chat \
+     -H "Content-Type: application/json" \
+     -d '{"session_id": "test", "message": "I want to apply for leave"}'
+   ```
+
+3. Verify the response routes to your new agent.
+
+### Debug Tips
+
+- Add print statements in your nodes to trace execution
+- Check the `current_agent` field in responses
+- Verify `valid_intents` includes your new intent
+- Ensure all node functions are imported in `workflow.py`
+
+---
+
+## 7. Checklist
+
+Use this checklist when adding a new agent:
+
+```
+[ ] 1. PROMPT: Added intent to INTENT_CLASSIFIER_PROMPT in prompts/templates.py
+[ ] 2. VALIDATION: Added intent to valid_intents list in intent_classifier.py
+[ ] 3. ROUTING: Updated route_after_intent() return type in workflow.py
+[ ] 4. ROUTING: Added routing logic for new intent in route_after_intent()
+[ ] 5. NODES: Created nodes/<your_agent>.py with node functions
+[ ] 6. IMPORTS: Imported node functions in workflow.py
+[ ] 7. WORKFLOW: Added nodes with workflow.add_node() in create_workflow()
+[ ] 8. WORKFLOW: Added edges with workflow.add_edge() or add_conditional_edges()
+[ ] 9. WORKFLOW: Updated conditional edges mapping
+[ ] 10. STATE: Added agent-specific fields to AgentState (if needed)
+[ ] 11. STATE: Updated create_initial_state() (if needed)
+[ ] 12. TOOLS: Created tools/<your_tool>.py (if needed)
+[ ] 13. TESTED: Verified intent classification works
+[ ] 14. TESTED: Verified workflow executes correctly
+```
+
+---
+
+## Quick Reference: File Locations
+
+```
+agent/src/
+├── main.py                          # Flask entry point
+├── agent/
+│   └── resource_allocator.py        # Main agent class
+├── graph/ 
+├── nodes/
+│   ├── intent_classifier.py         # Intent classification          ← MODIFY
+│   ├── resource_allocation.py       # Resource allocation nodes
+│   └── <your_agent>.py              # Your new agent nodes           ← CREATE
+├── tools/
+│   ├── jd_generator.py              # JD generation tools
+│   ├── approval_submission.py       # Approval tools
+│   └── <your_tool>.py               # Your new tools                 ← CREATE
+├── state/
+│   └── schemas.py                   # State definitions              ← MODIFY
+└── prompts/
+    └── templates.py                 # Prompt templates               ← MODIFY
+```
