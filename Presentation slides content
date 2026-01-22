@@ -1,0 +1,131 @@
+Understood 👍
+Below is ONLY 6 slides TOTAL, covering all weeks, clean and professional, with tech stack included.
+You can copy-paste directly.
+
+
+---
+
+Slide 1: Project Overview
+
+Project: HR Recruitment Agent
+
+Objective: Automate and assist HR recruitment workflow using AI agents
+
+Scope includes:
+
+Agent-based decision flow
+
+LLM integration
+
+Backend API support
+
+BI exposure
+
+
+Duration: 4 Weeks
+
+
+
+---
+
+Slide 2: Week 1 – Foundation & Research
+
+Developed HR agent login page using Next.js
+
+Faced Next.js version compatibility issues
+
+Learned Prompt Engineering for HR use cases
+
+Learned FastAPI basics for backend development
+
+Researched HR recruitment agent workflows
+
+Created agent flowchart
+
+
+Tech Stack:
+Next.js, FastAPI, Prompt Engineering, Python
+
+
+---
+
+Slide 3: Week 2 – Agent Architecture
+
+Designed agent folder structure
+
+Created graph-based workflow using LangGraph
+
+Integrated LLM into agent nodes
+
+Implemented state flow handling using LangGraph
+
+
+Tech Stack:
+LangGraph, Python, LLM
+
+
+---
+
+Slide 4: Week 3 – Integration & Optimization
+
+Integrated Job Description agent node
+
+Faced state transition issues in LangGraph
+
+Attempted FastAPI + LangGraph integration
+
+Explored LangChain memory optimization
+
+SummaryBufferMemoryWindow
+
+
+
+Tech Stack:
+LangGraph, FastAPI, LangChain, Python
+
+
+---
+
+Slide 5: Week 4 – Documentation & Learning
+
+Studied Unify Apps documentation
+
+Could not perform hands-on due to login access limitations
+
+Continued improvements on HR agent logic
+
+Started learning Self-Service BI concepts
+
+
+Tech Stack:
+Unify Apps, LangGraph, BI Tools
+
+
+---
+
+Slide 6: Key Learnings & Outcome
+
+Gained hands-on experience with AI agent architecture
+
+Learned state management using LangGraph
+
+Understood challenges in agent–API integration
+
+Exposure to LLMs, memory optimization, and BI
+
+Built strong foundation for production-ready HR agents
+
+
+
+---
+
+If you want, I can:
+
+Make it more technical or more HR/manager-friendly
+
+Add metrics & outcomes
+
+Convert it to internship evaluation format
+
+
+Just say the word 👍
